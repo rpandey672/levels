@@ -2,7 +2,7 @@ import AppKit
 
 @main
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private static var shared: AppDelegate?
 
     static func main() {
@@ -14,16 +14,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.run()
     }
 
+    private var model: MixerModel!
     private var statusItem: NSStatusItem!
+    private let popover = NSPopover()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "slider.vertical.3", accessibilityDescription: "Levels")
-        image?.isTemplate = true
-        statusItem.button?.image = image
+        model = MixerModel()
 
-        let menu = NSMenu()
-        menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        statusItem.menu = menu
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem.button {
+            let image = NSImage(systemSymbolName: "slider.vertical.3", accessibilityDescription: "Levels")
+            image?.isTemplate = true
+            button.image = image
+            button.target = self
+            button.action = #selector(togglePanel)
+        }
+
+        popover.behavior = .transient
+        popover.animates = false
+        popover.delegate = self
+    }
+
+    @objc private func togglePanel() {
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        guard let button = statusItem.button else { return }
+        model.panelOpened()
+        // rebuilt each open, dropped on close
+        popover.contentViewController = MixerPanel(model: model)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        model.onChange = nil
+        popover.contentViewController = nil
     }
 }
