@@ -126,7 +126,38 @@ final class TapSession {
             Renderer.render(input: input, output: output, gain: gain)
         }, "Creating the audio callback")
         ioProcID = procID
+        disableHardwareInputs(of: outputDevice)
         try CA.check(AudioDeviceStart(aggregateID, procID), "Starting audio")
+    }
+
+    // otherwise the aggregate opens the airpods mic and they drop to call quality
+    private func disableHardwareInputs(of outputDevice: AudioDeviceID) {
+        guard let ioProcID else { return }
+        let deviceInputStreams = (try? CA.getObjectIDs(outputDevice, kAudioDevicePropertyStreams,
+                                                       scope: kAudioObjectPropertyScopeInput))?.count ?? 0
+        guard deviceInputStreams > 0 else { return }
+
+        var addr = CA.address(kAudioDevicePropertyIOProcStreamUsage, scope: kAudioObjectPropertyScopeInput)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(aggregateID, &addr, 0, nil, &size) == noErr, size > 0 else { return }
+
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 16)
+        defer { raw.deallocate() }
+        raw.initializeMemory(as: UInt8.self, repeating: 0, count: Int(size))
+        raw.storeBytes(of: unsafeBitCast(ioProcID, to: UnsafeMutableRawPointer.self),
+                       as: UnsafeMutableRawPointer.self)
+        guard AudioObjectGetPropertyData(aggregateID, &addr, 0, nil, &size, raw) == noErr,
+              let countOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mNumberStreams),
+              let flagsOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn)
+        else { return }
+
+        let streamCount = Int(raw.load(fromByteOffset: countOffset, as: UInt32.self))
+        guard streamCount > 1 else { return }
+        // device streams first, tap stream last
+        for index in 0..<min(deviceInputStreams, streamCount - 1) {
+            raw.storeBytes(of: UInt32(0), toByteOffset: flagsOffset + index * MemoryLayout<UInt32>.stride, as: UInt32.self)
+        }
+        AudioObjectSetPropertyData(aggregateID, &addr, 0, nil, size, raw)
     }
 }
 
