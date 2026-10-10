@@ -198,14 +198,14 @@ enum Renderer {
         if let outRight {
             for f in 0..<frames {
                 g += step
-                outLeft.samples[f * outLeft.stride] = left.samples[f * left.stride] * g
-                outRight.samples[f * outRight.stride] = right.samples[f * right.stride] * g
+                outLeft.samples[f * outLeft.stride] = softClip(left.samples[f * left.stride] * g)
+                outRight.samples[f * outRight.stride] = softClip(right.samples[f * right.stride] * g)
             }
         } else {
             for f in 0..<frames {
                 g += step
                 let mono = (left.samples[f * left.stride] + right.samples[f * right.stride]) * 0.5
-                outLeft.samples[f * outLeft.stride] = mono * g
+                outLeft.samples[f * outLeft.stride] = softClip(mono * g)
             }
         }
         gain.current = target
@@ -249,5 +249,15 @@ enum Renderer {
             base += channels
         }
         return nil
+    }
+
+    // only kicks in above 0.9 so boosting doesn't crackle
+    @inline(__always)
+    private static func softClip(_ x: Float) -> Float {
+        let threshold: Float = 0.9
+        let magnitude = abs(x)
+        if magnitude <= threshold { return x }
+        let shaped = threshold + (1 - threshold) * tanhf((magnitude - threshold) / (1 - threshold))
+        return x < 0 ? -shaped : shaped
     }
 }

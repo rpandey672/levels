@@ -3,13 +3,13 @@ import CoreAudio
 
 // saved per bundle id
 struct AppSetting: Codable, Equatable {
-    // 0...1
+    // 0...2
     var level: Double = 1
     var muted = false
 
     var isDefault: Bool { abs(level - 1) < 0.0001 && !muted }
 
-    // squared so the slider feels linear
+    // squared so the slider feels linear, 2.0 is about +12dB
     var linearGain: Float { muted ? 0 : Float(level * level) }
 }
 
@@ -110,7 +110,7 @@ final class MixerModel {
     func setLevel(_ level: Double, for key: String) {
         var setting = self.setting(for: key)
         // snap to 100%
-        setting.level = abs(level - 1) < 0.04 ? 1 : min(max(level, 0), 1)
+        setting.level = abs(level - 1) < 0.04 ? 1 : min(max(level, 0), 2)
         store(setting, for: key, notify: false)
     }
 

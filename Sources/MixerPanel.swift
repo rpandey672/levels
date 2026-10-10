@@ -247,7 +247,7 @@ private final class RowView: NSView {
     private let playingIcon = NSImageView()
     private let notRunningLabel = NSTextField(labelWithString: "not running")
     private let levelLabel = NSTextField(labelWithString: "")
-    private let slider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let slider = NSSlider(value: 1, minValue: 0, maxValue: 2, target: nil, action: nil)
     private let muteButton = NSButton()
 
     init(key: String, model: MixerModel) {
@@ -283,6 +283,8 @@ private final class RowView: NSView {
 
         slider.controlSize = .small
         slider.isContinuous = true
+        slider.numberOfTickMarks = 3 // 0 / 100 / 200
+        slider.allowsTickMarkValuesOnly = false
         slider.target = self
         slider.action = #selector(sliderMoved)
 
@@ -339,7 +341,7 @@ private final class RowView: NSView {
         if updateSlider { slider.doubleValue = setting.level }
         slider.alphaValue = setting.muted ? 0.4 : 1
         levelLabel.stringValue = setting.muted ? "Muted" : "\(Int((setting.level * 100).rounded()))%"
-        levelLabel.textColor = .secondaryLabelColor
+        levelLabel.textColor = (setting.level > 1.001 && !setting.muted) ? .systemOrange : .secondaryLabelColor
         muteButton.image = NSImage(systemSymbolName: setting.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                                    accessibilityDescription: setting.muted ? "Unmute" : "Mute")
         muteButton.contentTintColor = setting.muted ? .systemRed : .secondaryLabelColor
