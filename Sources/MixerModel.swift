@@ -48,6 +48,8 @@ final class MixerModel {
 
     var hasAdjustments: Bool { !settings.isEmpty }
 
+    // keep io running through short gaps (between songs etc)
+    private static let idleGrace: TimeInterval = 5
     // don't tear down while dragging across 100%
     private static let lingerAtDefault: TimeInterval = 3
 
@@ -242,7 +244,9 @@ final class MixerModel {
     private func scheduleFollowUpIfNeeded() {
         followUp?.cancel()
         followUp = nil
-        let needsCheck = sessions.keys.contains { setting(for: $0).isDefault }
+        let needsCheck = sessions.contains { key, session in
+            (session.isRunning && groups[key]?.isPlaying != true) || setting(for: key).isDefault
+        }
         guard needsCheck else { return }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
@@ -278,6 +282,9 @@ final class MixerModel {
         let gain = gainControl(for: key)
         gain.target = setting.linearGain
 
+        let shouldRun = groups[key]?.isPlaying == true ||
+            (lastHeard[key].map { now.timeIntervalSince($0) < Self.idleGrace } ?? false)
+
         if let session = sessions[key] {
             if session.processes != objects {
                 do {
@@ -285,16 +292,17 @@ final class MixerModel {
                 } catch {
                     session.invalidate()
                     sessions[key] = nil
-                    startSession(key, objects: objects, gain: gain)
+                    startSession(key, objects: objects, gain: gain, running: shouldRun)
                     return
                 }
             }
+            session.setRunning(shouldRun)
         } else {
-            startSession(key, objects: objects, gain: gain)
+            startSession(key, objects: objects, gain: gain, running: shouldRun)
         }
     }
 
-    private func startSession(_ key: String, objects: [AudioObjectID], gain: GainControl) {
+    private func startSession(_ key: String, objects: [AudioObjectID], gain: GainControl, running: Bool) {
         guard let output else { return }
         if let failed = failedAt[key], Date().timeIntervalSince(failed) < 3 { return }
         do {
@@ -302,7 +310,8 @@ final class MixerModel {
                                            processes: objects,
                                            outputDevice: output.id,
                                            outputUID: output.uid,
-                                           gain: gain)
+                                           gain: gain,
+                                           running: running)
             failedAt[key] = nil
             errorMessage = nil
         } catch {

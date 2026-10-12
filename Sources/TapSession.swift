@@ -21,7 +21,8 @@ final class GainControl {
 }
 
 // app -> process tap (muted at source) -> private aggregate [tap + output] -> ioproc * gain
-// taps die with the process so a crash just gives you normal audio back.
+// io is stopped while the app is quiet. taps die with the process so a crash
+// just gives you normal audio back.
 final class TapSession {
     private(set) var processes: [AudioObjectID]
     let gain: GainControl
@@ -30,13 +31,15 @@ final class TapSession {
     private var tapID = CA.unknown
     private var aggregateID = CA.unknown
     private var ioProcID: AudioDeviceIOProcID?
+    private(set) var isRunning = false
     private let queue = DispatchQueue(label: "levels.tap", qos: .userInteractive)
 
     init(name: String,
          processes: [AudioObjectID],
          outputDevice: AudioDeviceID,
          outputUID: String,
-         gain: GainControl) throws {
+         gain: GainControl,
+         running: Bool) throws {
         self.processes = processes
         self.gain = gain
         self.description = Self.makeDescription(name: name, processes: processes, uuid: UUID())
@@ -46,7 +49,8 @@ final class TapSession {
             try CA.check(AudioHardwareCreateProcessTap(description, &tap), "Creating the audio tap for \(name)")
             tapID = tap
             try createAggregate(name: name, outputUID: outputUID)
-            try startIO(outputDevice: outputDevice)
+            try createIO(outputDevice: outputDevice)
+            if running { try start() }
         } catch {
             invalidate()
             throw error
@@ -54,6 +58,21 @@ final class TapSession {
     }
 
     deinit { invalidate() }
+
+    func setRunning(_ running: Bool) {
+        guard running != isRunning, ioProcID != nil else { return }
+        if running {
+            try? start()
+        } else {
+            AudioDeviceStop(aggregateID, ioProcID)
+            isRunning = false
+        }
+    }
+
+    private func start() throws {
+        try CA.check(AudioDeviceStart(aggregateID, ioProcID), "Starting audio")
+        isRunning = true
+    }
 
     // e.g. chrome spun up a new audio helper
     func update(processes newProcesses: [AudioObjectID]) throws {
@@ -77,6 +96,7 @@ final class TapSession {
             AudioHardwareDestroyAggregateDevice(aggregateID)
         }
         ioProcID = nil
+        isRunning = false
         aggregateID = CA.unknown
         if tapID != CA.unknown {
             AudioHardwareDestroyProcessTap(tapID)
@@ -91,7 +111,7 @@ final class TapSession {
         description.uuid = uuid
         description.name = name
         description.isPrivate = true
-        description.muteBehavior = .mutedWhenTapped
+        description.muteBehavior = .muted
         return description
     }
 
@@ -119,7 +139,7 @@ final class TapSession {
         aggregateID = device
     }
 
-    private func startIO(outputDevice: AudioDeviceID) throws {
+    private func createIO(outputDevice: AudioDeviceID) throws {
         let gain = self.gain
         var procID: AudioDeviceIOProcID?
         try CA.check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, input, _, output, _ in
@@ -127,7 +147,6 @@ final class TapSession {
         }, "Creating the audio callback")
         ioProcID = procID
         disableHardwareInputs(of: outputDevice)
-        try CA.check(AudioDeviceStart(aggregateID, procID), "Starting audio")
     }
 
     // otherwise the aggregate opens the airpods mic and they drop to call quality
