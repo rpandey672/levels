@@ -72,6 +72,10 @@ final class MixerModel {
     private var defaultSince: [String: Date] = [:]
     private var failedAt: [String: Date] = [:]
     private var output: (id: AudioDeviceID, uid: String)?
+    private var watchedOutput = CA.unknown
+    private var formatListener: AudioObjectPropertyListenerBlock?
+    private var outputFormat: (rate: Float64, streams: Int)?
+    private var rebuildWork: DispatchWorkItem?
     private var permissionRequestPending = false
     private var refreshPending = false
     private var followUp: DispatchWorkItem?
@@ -377,13 +381,74 @@ final class MixerModel {
             let changed = output != nil
             output = nil
             outputName = "No output device"
+            watchOutputFormat(CA.unknown)
             return changed
         }
         outputName = (try? CA.getString(id, kAudioObjectPropertyName)) ?? "Output"
         let changed = output?.uid != uid
         output = (id, uid)
+        watchOutputFormat(id)
         onChange?()
         return changed
+    }
+
+    // bluetooth headphones switching between headset and normal mode change their
+    // rate and streams under the same device id, which leaves the taps silent
+    private static let formatSelectors: [(AudioObjectPropertySelector, AudioObjectPropertyScope)] = [
+        (kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal),
+        (kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput),
+        (kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeOutput),
+    ]
+
+    private func watchOutputFormat(_ device: AudioDeviceID) {
+        guard device != watchedOutput else { return }
+        if let block = formatListener {
+            for (selector, scope) in Self.formatSelectors {
+                var addr = CA.address(selector, scope: scope)
+                AudioObjectRemovePropertyListenerBlock(watchedOutput, &addr, .main, block)
+            }
+        }
+        formatListener = nil
+        watchedOutput = device
+        outputFormat = nil
+        guard device != CA.unknown else { return }
+
+        outputFormat = Self.format(of: device)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.scheduleRebuild() }
+        }
+        for (selector, scope) in Self.formatSelectors {
+            var addr = CA.address(selector, scope: scope)
+            AudioObjectAddPropertyListenerBlock(device, &addr, .main, block)
+        }
+        formatListener = block
+    }
+
+    private static func format(of device: AudioDeviceID) -> (rate: Float64, streams: Int) {
+        let rate = (try? CA.get(device, kAudioDevicePropertyNominalSampleRate, Float64(0))) ?? 0
+        let streams = (try? CA.getObjectIDs(device, kAudioDevicePropertyStreams,
+                                            scope: kAudioObjectPropertyScopeOutput))?.count ?? 0
+        return (rate, streams)
+    }
+
+    // wait for the switch to settle, then rebuild the taps on the new format
+    private func scheduleRebuild() {
+        rebuildWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.watchedOutput != CA.unknown else { return }
+                self.rebuildWork = nil
+                let current = Self.format(of: self.watchedOutput)
+                if let previous = self.outputFormat,
+                   previous.rate == current.rate, previous.streams == current.streams { return }
+                self.outputFormat = current
+                guard !self.sessions.isEmpty else { return }
+                self.teardownAll()
+                self.refresh()
+            }
+        }
+        rebuildWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
     // MARK: - Persistence
