@@ -28,6 +28,7 @@ private struct AppGroup {
 private enum DefaultsKey {
     static let settings = "appSettings"
     static let showAll = "showAllApps"
+    static let macMic = "useMacMic"
 }
 
 // no polling, everything is driven by core audio / workspace notifications
@@ -42,6 +43,15 @@ final class MixerModel {
     var showAllApps = UserDefaults.standard.bool(forKey: DefaultsKey.showAll) {
         didSet {
             UserDefaults.standard.set(showAllApps, forKey: DefaultsKey.showAll)
+            onChange?()
+        }
+    }
+
+    // on by default, see InputRouting
+    var useMacMic = UserDefaults.standard.object(forKey: DefaultsKey.macMic) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(useMacMic, forKey: DefaultsKey.macMic)
+            if useMacMic { InputRouting.preferMacMic() }
             onChange?()
         }
     }
@@ -72,6 +82,7 @@ final class MixerModel {
         settings = Self.loadSettings()
         permission = AudioCapturePermission.status()
         readOutputDevice()
+        if useMacMic { InputRouting.preferMacMic() }
         installListeners()
         refresh()
     }
@@ -169,6 +180,17 @@ final class MixerModel {
                     guard let self, self.readOutputDevice() else { return }
                     self.teardownAll()
                     self.refresh()
+                }
+            }
+        }
+
+        // macos switches the input to the headphones when they connect
+        var inputAddr = CA.address(kAudioHardwarePropertyDefaultInputDevice)
+        AudioObjectAddPropertyListenerBlock(CA.system, &inputAddr, .main) { [weak self] _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                MainActor.assumeIsolated {
+                    guard let self, self.useMacMic else { return }
+                    InputRouting.preferMacMic()
                 }
             }
         }

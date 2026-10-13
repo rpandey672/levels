@@ -31,3 +31,4 @@ Idle it uses about 13 MB, 0% CPU, and no timers. The audio thread for an adjuste
 - Adjusted apps always play through the default output device.
 - Going above 100% boosts the app (about +12 dB at the top). A soft clipper stops it from crackling.
 - If an app doesn't show up, tick "Show all audio apps".
+- With Bluetooth headphones connected, Levels keeps the Mac's built-in mic as the input so the headphones stay in high quality mode instead of switching to headset mode when something uses the mic. Untick "Use Mac mic with Bluetooth headphones" if you want the headphone mic.
