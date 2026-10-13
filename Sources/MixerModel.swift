@@ -28,7 +28,6 @@ private struct AppGroup {
 private enum DefaultsKey {
     static let settings = "appSettings"
     static let showAll = "showAllApps"
-    static let macMic = "useMacMic"
 }
 
 // no polling, everything is driven by core audio / workspace notifications
@@ -43,15 +42,6 @@ final class MixerModel {
     var showAllApps = UserDefaults.standard.bool(forKey: DefaultsKey.showAll) {
         didSet {
             UserDefaults.standard.set(showAllApps, forKey: DefaultsKey.showAll)
-            onChange?()
-        }
-    }
-
-    // on by default, see InputRouting
-    var useMacMic = UserDefaults.standard.object(forKey: DefaultsKey.macMic) as? Bool ?? true {
-        didSet {
-            UserDefaults.standard.set(useMacMic, forKey: DefaultsKey.macMic)
-            if useMacMic { InputRouting.preferMacMic() }
             onChange?()
         }
     }
@@ -86,7 +76,6 @@ final class MixerModel {
         settings = Self.loadSettings()
         permission = AudioCapturePermission.status()
         readOutputDevice()
-        if useMacMic { InputRouting.preferMacMic() }
         installListeners()
         refresh()
     }
@@ -161,12 +150,9 @@ final class MixerModel {
             settings[key] = setting
             defaultSince[key] = nil
         }
+        gains[key]?.target = setting.linearGain
         saveSettings()
-        if key == AppResolver.callsKey {
-            for other in Set(groups.keys).union(sessions.keys) { reconcile(other) }
-        } else {
-            reconcile(key)
-        }
+        reconcile(key)
         scheduleFollowUpIfNeeded()
         if notify { onChange?() }
     }
@@ -187,19 +173,6 @@ final class MixerModel {
                     guard let self, self.readOutputDevice() else { return }
                     self.teardownAll()
                     self.refresh()
-                }
-            }
-        }
-
-        // macos switches the input to the headphones when they connect
-        var inputAddr = CA.address(kAudioHardwarePropertyDefaultInputDevice)
-        AudioObjectAddPropertyListenerBlock(CA.system, &inputAddr, .main) { [weak self] _, _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                MainActor.assumeIsolated {
-                    // switching mid call makes facetime rebuild its audio and it can
-                    // come back silent. wait until the call ends (see refresh)
-                    guard let self, self.useMacMic, !self.callActive else { return }
-                    InputRouting.preferMacMic()
                 }
             }
         }
@@ -269,20 +242,9 @@ final class MixerModel {
             lastHeard[key] = now
         }
         for (key, group) in newGroups where group.isPlaying { lastHeard[key] = now }
-        let callEnded = groups[AppResolver.callsKey]?.isPlaying == true &&
-            newGroups[AppResolver.callsKey]?.isPlaying != true
         groups = newGroups
 
         for key in Set(groups.keys).union(sessions.keys) { reconcile(key) }
-        if useMacMic && !callActive { InputRouting.preferMacMic() }
-        if callEnded {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleGrace + 0.5) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.useMacMic, !self.callActive else { return }
-                    InputRouting.preferMacMic()
-                }
-            }
-        }
         scheduleFollowUpIfNeeded()
         onChange?()
     }
@@ -292,7 +254,7 @@ final class MixerModel {
         followUp?.cancel()
         followUp = nil
         let needsCheck = sessions.contains { key, session in
-            (session.isRunning && groups[key]?.isPlaying != true) || setting(for: key).isDefault || callBoost > 1
+            (session.isRunning && groups[key]?.isPlaying != true) || setting(for: key).isDefault
         }
         guard needsCheck else { return }
         let work = DispatchWorkItem { [weak self] in
@@ -308,39 +270,14 @@ final class MixerModel {
 
     // MARK: - Taps
 
-    // call audio can't be tapped: macos ducks anything that isn't the call itself,
-    // including our replay of it, so the call goes silent. instead the calls row
-    // turns everything else up by the same amount while a call is going.
-    private static let maxGain: Float = 4 // about +12dB
-
-    private var callActive: Bool {
-        let key = AppResolver.callsKey
-        return groups[key]?.isPlaying == true ||
-            (lastHeard[key].map { Date().timeIntervalSince($0) < Self.idleGrace } ?? false)
-    }
-
-    private var callBoost: Float {
-        guard callActive else { return 1 }
-        let call = setting(for: AppResolver.callsKey).linearGain
-        return call <= 0 ? Self.maxGain : min(1 / call, Self.maxGain)
-    }
-
-    private func effectiveGain(_ key: String) -> Float {
-        if key == AppResolver.callsKey { return 1 }
-        let base = setting(for: key).linearGain
-        guard base > 0 else { return 0 }
-        return min(base * callBoost, Self.maxGain)
-    }
-
     private func reconcile(_ key: String) {
+        let setting = self.setting(for: key)
         let objects = groups[key]?.objectIDs ?? []
         let now = Date()
-        let target = effectiveGain(key)
-        let adjusted = key != AppResolver.callsKey && abs(target - 1) > 0.0001
 
-        let lingering = !adjusted && key != AppResolver.callsKey && sessions[key] != nil &&
+        let lingering = setting.isDefault && sessions[key] != nil &&
             (defaultSince[key].map { now.timeIntervalSince($0) < Self.lingerAtDefault } ?? false)
-        let wanted = (adjusted || lingering) && !objects.isEmpty && permission != .denied
+        let wanted = (!setting.isDefault || lingering) && !objects.isEmpty && permission != .denied
 
         guard wanted else {
             if let session = sessions.removeValue(forKey: key) { session.invalidate() }
@@ -352,7 +289,7 @@ final class MixerModel {
         }
 
         let gain = gainControl(for: key)
-        gain.target = target
+        gain.target = setting.linearGain
 
         let shouldRun = groups[key]?.isPlaying == true ||
             (lastHeard[key].map { now.timeIntervalSince($0) < Self.idleGrace } ?? false)

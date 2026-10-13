@@ -26,8 +26,16 @@ strip -x "$APP/Contents/MacOS/Levels"
 
 cp Info.plist "$APP/Contents/Info.plist"
 
-echo "-> Signing (ad-hoc)..."
-codesign --force --sign - "$APP"
+# a real signing identity keeps the audio recording permission across rebuilds.
+# ad-hoc signatures change every build and macOS forgets the grant.
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' 'NF>1 {print $2; exit}')"
+if [[ -n "$IDENTITY" ]]; then
+  echo "-> Signing as $IDENTITY..."
+  codesign --force --sign "$IDENTITY" "$APP"
+else
+  echo "-> Signing (ad-hoc, macOS will ask for audio permission again)..."
+  codesign --force --sign - "$APP"
+fi
 
 echo "OK: Built $APP"
 

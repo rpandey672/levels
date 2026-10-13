@@ -20,7 +20,6 @@ final class MixerPanel: NSViewController {
     private let emptyLabel = NSTextField(labelWithString: "Nothing is playing right now.")
     private let showAllBox = NSButton(checkboxWithTitle: "Show all audio apps", target: nil, action: nil)
     private let loginBox = NSButton(checkboxWithTitle: "Open at login", target: nil, action: nil)
-    private let macMicBox = NSButton(checkboxWithTitle: "Use Mac mic with Bluetooth headphones", target: nil, action: nil)
     private let resetAllButton = NSButton(title: "Reset All", target: nil, action: nil)
 
     init(model: MixerModel) {
@@ -116,14 +115,12 @@ final class MixerPanel: NSViewController {
     }
 
     private func makeFooter() -> NSView {
-        for control in [showAllBox, loginBox, macMicBox, resetAllButton] {
+        for control in [showAllBox, loginBox, resetAllButton] {
             control.font = .systemFont(ofSize: 11)
             control.target = self
         }
         showAllBox.action = #selector(toggleShowAll)
         loginBox.action = #selector(toggleLogin)
-        macMicBox.action = #selector(toggleMacMic)
-        macMicBox.toolTip = "Keeps AirPods and other Bluetooth headphones in high quality mode instead of headset mode"
         resetAllButton.action = #selector(resetAll)
         resetAllButton.controlSize = .small
         loginBox.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -133,13 +130,12 @@ final class MixerPanel: NSViewController {
         quit.controlSize = .small
 
         let toggles = NSStackView(views: [showAllBox, NSView(), loginBox])
-        let micRow = NSStackView(views: [macMicBox, NSView()])
         let buttons = NSStackView(views: [resetAllButton, NSView(), quit])
-        let footer = NSStackView(views: [toggles, micRow, buttons])
+        let footer = NSStackView(views: [toggles, buttons])
         footer.orientation = .vertical
         footer.spacing = 8
         footer.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
-        for row in [toggles, micRow, buttons] {
+        for row in [toggles, buttons] {
             row.widthAnchor.constraint(equalTo: footer.widthAnchor, constant: -28).isActive = true
         }
         return footer
@@ -156,7 +152,6 @@ final class MixerPanel: NSViewController {
     private func refresh() {
         outputLabel.stringValue = model.outputName
         showAllBox.state = model.showAllApps ? .on : .off
-        macMicBox.state = model.useMacMic ? .on : .off
         resetAllButton.isEnabled = model.hasAdjustments
         updateBanners()
 
@@ -221,7 +216,6 @@ final class MixerPanel: NSViewController {
     // MARK: - Actions
 
     @objc private func toggleShowAll() { model.showAllApps = showAllBox.state == .on }
-    @objc private func toggleMacMic() { model.useMacMic = macMicBox.state == .on }
     @objc private func resetAll() { model.resetAll() }
 
     @objc private func toggleLogin() {
